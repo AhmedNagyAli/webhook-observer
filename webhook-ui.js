@@ -1,11 +1,13 @@
 const http = require('http');
 
 let logs = [];
+let totalReceived = 0; // Track total webhooks received (all time)
 
 const server = http.createServer((req, res) => {
     // CLEAR LOGS
     if (req.url === '/clear' && req.method === 'POST') {
         logs = [];
+        totalReceived = 0; // Reset total counter when clearing
         res.writeHead(200);
         res.end('cleared');
         return;
@@ -14,7 +16,7 @@ const server = http.createServer((req, res) => {
     // LOGS ENDPOINT
     if (req.url === '/logs') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(logs));
+        res.end(JSON.stringify({ logs, totalReceived }));
         return;
     }
 
@@ -34,6 +36,10 @@ const server = http.createServer((req, res) => {
                 parsed = body;
             }
 
+            // Increment total counter
+            totalReceived++;
+
+            // Add new webhook to the beginning
             logs.unshift({
                 id: Date.now() + Math.random(),
                 time: new Date().toISOString(),
@@ -41,9 +47,13 @@ const server = http.createServer((req, res) => {
                 method: req.method,
                 headers: req.headers,
                 body: parsed,
+                sequence: totalReceived // Add sequence number
             });
 
-            if (logs.length > 50) logs.pop();
+            // Keep only the most recent 50 webhooks in memory
+            if (logs.length > 50) {
+                logs = logs.slice(0, 50);
+            }
 
             res.writeHead(200);
             res.end('OK');
@@ -95,12 +105,17 @@ const server = http.createServer((req, res) => {
             color: #000;
         }
 
-        .total-count {
+        .stats {
+            display: flex;
+            gap: 10px;
+            margin-left: auto;
+        }
+
+        .stat-box {
             background: #00ff9c20;
             padding: 6px 12px;
             border: 1px solid #00ff9c;
             font-weight: bold;
-            margin-left: auto;
         }
 
         .logs {
@@ -131,6 +146,14 @@ const server = http.createServer((req, res) => {
 
         .meta-text {
             flex: 1;
+        }
+
+        .sequence-badge {
+            background: #00ff9c30;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: bold;
         }
 
         .actions {
@@ -210,9 +233,9 @@ const server = http.createServer((req, res) => {
                 align-items: stretch;
             }
             
-            .total-count {
+            .stats {
                 margin-left: 0;
-                text-align: center;
+                justify-content: space-between;
             }
         }
     </style>
@@ -222,7 +245,10 @@ const server = http.createServer((req, res) => {
 <div class="topbar">
     <button onclick="refreshLogs()">🔄 Refresh (r)</button>
     <button onclick="clearLogs()">🗑️ Clear (c)</button>
-    <div class="total-count" id="totalCount">Total: 0</div>
+    <div class="stats">
+        <div class="stat-box" id="displayedCount">Displayed: 0</div>
+        <div class="stat-box" id="totalCount">Total Received: 0</div>
+    </div>
 </div>
 
 <div class="logs" id="logs"></div>
@@ -230,6 +256,7 @@ const server = http.createServer((req, res) => {
 
 <script>
 let logsData = [];
+let totalReceived = 0;
 
 function showToast(message) {
     const toast = document.getElementById('toast');
@@ -271,14 +298,19 @@ function linkify(text) {
     });
 }
 
-function render(logs) {
+function render(logs, total) {
     const container = document.getElementById('logs');
     container.innerHTML = '';
 
-    // Update total count
+    // Update counters
+    const displayedCountEl = document.getElementById('displayedCount');
     const totalCountEl = document.getElementById('totalCount');
-    totalCountEl.textContent = \`Total: \${logs.length}\`;
-    totalCountEl.title = \`\${logs.length} webhook\${logs.length !== 1 ? 's' : ''} received\`;
+    
+    displayedCountEl.textContent = \`Displayed: \${logs.length}\`;
+    displayedCountEl.title = \`Currently showing \${logs.length} most recent webhooks\`;
+    
+    totalCountEl.textContent = \`Total Received: \${total}\`;
+    totalCountEl.title = \`Total webhooks received since last clear\`;
 
     if (!logs.length) {
         container.innerHTML = '<div class="empty">📭 No webhooks received yet</div>';
@@ -291,13 +323,14 @@ function render(logs) {
 
         const bodyText = format(log.body);
         const headersText = format(log.headers);
-        const fullWebhookText = \`\${log.time} | \${log.method} | \${log.url}\\n\\nHeaders:\\n\${headersText}\\n\\nBody:\\n\${bodyText}\`;
+        const fullWebhookText = \`#\${log.sequence} | \${log.time} | \${log.method} | \${log.url}\\n\\nHeaders:\\n\${headersText}\\n\\nBody:\\n\${bodyText}\`;
 
         const safeBody = linkify(escapeHtml(bodyText));
         const safeUrl = linkify(escapeHtml(log.url));
 
         div.innerHTML = \`
             <div class="meta">
+                <span class="sequence-badge">#\${log.sequence}</span>
                 <span class="meta-text">
                     📅 \${log.time} | 📍 \${log.method} | 🔗 \${safeUrl}
                 </span>
@@ -342,8 +375,10 @@ function render(logs) {
 async function refreshLogs() {
     try {
         const res = await fetch('/logs');
-        logsData = await res.json();
-        render(logsData);
+        const data = await res.json();
+        logsData = data.logs;
+        totalReceived = data.totalReceived;
+        render(logsData, totalReceived);
     } catch (e) {
         console.error('Failed to refresh logs:', e);
     }
